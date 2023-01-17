@@ -88,6 +88,26 @@ export function getAppStatus(appName) {
   return app ? app.status : null;
 }
 
+/**
+ * 两种使用方式
+ * singleSpa.registerApplication(
+ *   'appName',
+ *   () => System.import('appName'),
+ *   location => location.pathname.startsWith('appName')
+ * )
+ * 
+ * singleSpa.registerApplication({
+ *   name: 'appName',
+ *   app: () => System.import('appName'),
+ *   activeWhen: '/appName'
+ *   customProps: {}
+ * })
+ * 
+ * @param {*} appNameOrConfig // 应用名称或者应用配置对象
+ * @param {*} appOrLoadApp // 加载应用的函数，返回一个应用或者一个Promise
+ * @param {*} activeWhen // 判断是否激活，纯函数，返回 ture or false
+ * @param {*} customProps // 传递给子应用的 props 对象，可用来通信
+ */
 export function registerApplication(
   appNameOrConfig,
   appOrLoadApp,

@@ -1,11 +1,17 @@
+// 启动函数 start
 export { start } from "./start.js";
+
+// 用于支持 jquery
 export { ensureJQuerySupport } from "./jquery-support.js";
+
 export {
   setBootstrapMaxTime,
   setMountMaxTime,
   setUnmountMaxTime,
   setUnloadMaxTime,
 } from "./applications/timeouts.js";
+
+
 export {
   registerApplication,
   unregisterApplication,

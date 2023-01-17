@@ -1,59 +1,99 @@
-<img src="https://single-spa.js.org/img/logo-white-bgblue.svg" width="50" height="50">
+# single-spa 源码阅读
 
-[![npm version](https://img.shields.io/npm/v/single-spa.svg?style=flat-square)](https://www.npmjs.org/package/single-spa)
-[![](https://data.jsdelivr.com/v1/package/npm/single-spa/badge)](https://www.jsdelivr.com/package/npm/single-spa)
-[![NPM Downloads](https://badgen.net/npm/dm/single-spa)](https://npmjs.org/package/single-spa)
+本文基于 single-spa 5.9.3 版本
 
-# single-spa
+目录结构为：
 
-[Join the chat on Slack](https://join.slack.com/t/single-spa/shared_invite/zt-yxfqpl2u-PNx3uZtS3pgAXbOBWsdwOA)
+ <img src="./imgs/img1.png" style="zoom:50%;" />
 
-[Donate to this project](https://opencollective.com/single-spa)
+简单从 single-spa 的目录源码结构就能看出来，整个项目是基于 rollup 打包的，进入到 `rollup.config.js` 文件里面，会发现，项目入口是 `src` 下的 `single-spa.js`
 
-## A javascript framework for front-end microservices
+```js
+export default (async () => [
+  {
+    input: "./src/single-spa.js",
+    output: [
+      // .....
+    ],
+  },
+  {
+    input: "./src/single-spa.js",
+    output: {
+      // .....
+    },
+  },
+])();
+```
 
-Build micro frontends that coexist and can ([but don't need to](https://single-spa.js.org/docs/faq.html#can-i-use-more-than-one-framework)) be written with their own framework. This allows you to:
 
-- [Use multiple frameworks](/docs/single-spa-ecosystem.md#help-for-frameworks) on the same page [without refreshing the page](/docs/applications.md)
-  ([React](https://github.com/single-spa/single-spa-react), [AngularJS](https://github.com/single-spa/single-spa-angularjs), [Angular](https://github.com/single-spa/single-spa-angular), [Ember](https://github.com/single-spa/single-spa-ember), or whatever you're using)
-- Write new code, possibly with a new framework, without rewriting your existing app
-- Lazy load code for improved initial load time.
 
-## Sponsors
+## 入口文件
 
-<a href="https://datacamp.com/"><img height="50" alt="DataCamp-Logo" src="https://user-images.githubusercontent.com/5524384/117517708-1047f200-af5a-11eb-8d5d-0997d6df06d6.png"></a>
-<a href="https://pos.toasttab.com/"><img height="50" alt="Toast-Logo" src="https://user-images.githubusercontent.com/5524384/117516281-eab8e980-af55-11eb-9d3c-baff0c3c86e6.png"></a>
-<a href="https://www.asurion.com/"><img height="50" alt="asurion-logo" src="https://user-images.githubusercontent.com/5524384/166588171-81da0510-2eae-467b-84fe-e3db90a8edf3.png"></a>
+上面提到，`single-spa.js` 是入口，下面来看看这个入口文件中有什么东西
 
-To add your company's logo to this section:
+```js
+export { start } from "./start.js";
+export { ensureJQuerySupport } from "./jquery-support.js";
+export {
+  setBootstrapMaxTime,
+  setMountMaxTime,
+  setUnmountMaxTime,
+  setUnloadMaxTime,
+} from "./applications/timeouts.js";
+export {
+  registerApplication,
+  unregisterApplication,
+  getMountedApps,
+  getAppStatus,
+  unloadApplication,
+  checkActivityFunctions,
+  getAppNames,
+  pathToActiveWhen,
+} from "./applications/apps.js";
+export { navigateToUrl } from "./navigation/navigation-events.js";
+export { triggerAppChange } from "./navigation/reroute.js";
+export {
+  addErrorHandler,
+  removeErrorHandler,
+} from "./applications/app-errors.js";
+export { mountRootParcel } from "./parcels/mount-parcel.js";
 
-- Become a [recurring Open Collective sponsor](https://opencollective.com/single-spa) of at least \$100 a month.
-- Become a [recurring Github sponsor](https://github.com/sponsors/joeldenning) of at least \$100 a month.
-- Sponsor a core team member to implement a specific feature for single-spa. Pay our regular consulting rate. Inquire in our Slack workspace.
+export {
+  NOT_LOADED,
+  LOADING_SOURCE_CODE,
+  NOT_BOOTSTRAPPED,
+  BOOTSTRAPPING,
+  NOT_MOUNTED,
+  MOUNTING,
+  UPDATING,
+  LOAD_ERROR,
+  MOUNTED,
+  UNMOUNTING,
+  SKIP_BECAUSE_BROKEN,
+} from "./applications/app.helpers.js";
 
-## Documentation
+import devtools from "./devtools/devtools";
+import { isInBrowser } from "./utils/runtime-environment.js";
 
-You can find the single-spa documentation [on the website](https://single-spa.js.org/).
+if (isInBrowser && window.__SINGLE_SPA_DEVTOOLS__) {
+  window.__SINGLE_SPA_DEVTOOLS__.exposedMethods = devtools;
+}
+```
 
-Check out the [Getting Started](https://single-spa.js.org/docs/getting-started-overview.html) page for a quick overview.
+发现，其实入口文件，就是导出了一堆 single-spa 的 API，提供给外部使用。
 
-## Demo and examples
 
-Please see the [examples page](https://single-spa.js.org/docs/examples.html) on the website.
 
-## Want to help?
+## single-spa 基本使用
 
-Want to file a bug, contribute some code, or improve documentation? Excellent! Read up on our
-guidelines for [contributing](https://single-spa.js.org/docs/contributing-overview.html) on the [single-spa website](https://single-spa.js.org).
+single-spa 最基本的使用方法是：
 
-## Contributing
+- 主应用入口调用 registerApplication 注册子应用；调用 start 方法启动
+- 子应用入口导出 bootstrap、mount、unmount 等生命周期函数
 
-The main purpose of this repository is to continue to evolve single-spa, making it better and easier to use. Development of single-spa, and the [single-spa ecosystem](https://single-spa.js.org/docs/ecosystem.html) happens in the open on GitHub, and we are grateful to the community for contributing bugfixes and improvements. Read below to learn how you can take part in improving single-spa.
 
-### [Code of Conduct](https://single-spa.js.org/docs/code-of-conduct.html)
 
-Single-spa has adopted a Code of Conduct that we expect project participants to adhere to. Please read [the full text](https://single-spa.js.org/docs/code-of-conduct.html) so that you can understand what actions will and will not be tolerated.
 
-### [Contributing Guide](https://single-spa.js.org/docs/contributing-overview.html)
 
-Read our [contributing guide](https://single-spa.js.org/docs/contributing-overview.html) to learn about our development process, how to propose bugfixes and improvements, and how to build and test your changes to single-spa.
+## 注册应用 registerApplication
+
