@@ -18,6 +18,7 @@ import type {
   ObjectType,
 } from './interfaces';
 import { createSandboxContainer, css } from './sandbox';
+import { cachedGlobals } from './sandbox/proxySandbox';
 import {
   Deferred,
   genAppInstanceIdByName,
@@ -61,8 +62,7 @@ async function validateSingularMode<T extends ObjectType>(
   return typeof validate === 'function' ? validate(app) : !!validate;
 }
 
-// @ts-ignore
-const supportShadowDOM = document.head.attachShadow || document.head.createShadowRoot;
+const supportShadowDOM = !!document.head.attachShadow || !!(document.head as any).createShadowRoot;
 
 function createElement(
   appContent: string,
@@ -263,7 +263,9 @@ export async function loadApp<T extends ObjectType>(
   } = configuration;
 
   // get the entry html content and script executor
-  const { template, execScripts, assetPublicPath } = await importEntry(entry, importEntryOpts);
+  const { template, execScripts, assetPublicPath, getExternalScripts } = await importEntry(entry, importEntryOpts);
+  // trigger external scripts loading to make sure all assets are ready before execScripts calling
+  await getExternalScripts();
 
   // as single-spa load and bootstrap new app parallel with other apps unmounting
   // (see https://github.com/CanopyTax/single-spa/blob/master/src/navigation/reroute.js#L74)
@@ -272,7 +274,7 @@ export async function loadApp<T extends ObjectType>(
     await (prevAppUnmountedDeferred && prevAppUnmountedDeferred.promise);
   }
 
-  const appContent = getDefaultTplWrapper(appInstanceId)(template);
+  const appContent = getDefaultTplWrapper(appInstanceId, sandbox)(template);
 
   const strictStyleIsolation = typeof sandbox === 'object' && !!sandbox.strictStyleIsolation;
 
@@ -311,6 +313,8 @@ export async function loadApp<T extends ObjectType>(
   let mountSandbox = () => Promise.resolve();
   let unmountSandbox = () => Promise.resolve();
   const useLooseSandbox = typeof sandbox === 'object' && !!sandbox.loose;
+  // enable speedy mode by default
+  const speedySandbox = typeof sandbox === 'object' ? sandbox.speedy !== false : true;
   let sandboxContainer;
   if (sandbox) {
     sandboxContainer = createSandboxContainer(
@@ -321,6 +325,7 @@ export async function loadApp<T extends ObjectType>(
       useLooseSandbox,
       excludeAssetFilter,
       global,
+      speedySandbox,
     );
     // 用沙箱的代理对象作为接下来使用的全局对象
     global = sandboxContainer.instance.proxy as typeof window;
@@ -339,7 +344,9 @@ export async function loadApp<T extends ObjectType>(
   await execHooksChain(toArray(beforeLoad), app, global);
 
   // get the lifecycle hooks from module exports
-  const scriptExports: any = await execScripts(global, sandbox && !useLooseSandbox);
+  const scriptExports: any = await execScripts(global, sandbox && !useLooseSandbox, {
+    scopedGlobalVariables: speedySandbox ? cachedGlobals : [],
+  });
   const { bootstrap, mount, unmount, update } = getLifecyclesFromExports(
     scriptExports,
     appName,

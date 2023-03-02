@@ -1,6 +1,6 @@
 {
   "name": "qiankun",
-  "version": "2.7.0",
+  "version": "2.10.2",
   "description": "A completed implementation of Micro Frontends",
   "keywords": [
     "micro frontend",
@@ -10,10 +10,25 @@
     "micro-frontends",
     "microservice"
   ],
+  "homepage": "https://github.com/kuitos/qiankun#readme",
+  "bugs": {
+    "url": "https://github.com/kuitos/qiankun/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuitos/qiankun.git"
+  },
+  "license": "MIT",
+  "author": "Kuitos",
+  "sideEffects": false,
   "main": "./lib/index.js",
   "module": "./es/index.js",
   "types": "./es/index.d.ts",
-  "sideEffects": false,
+  "files": [
+    "dist",
+    "es",
+    "lib"
+  ],
   "scripts": {
     "examples:install": "npm-run-all --serial build install:*",
     "examples:start": "npm-run-all --parallel start:*",
@@ -46,53 +61,6 @@
     "ci": "yarn lint && yarn build && yarn test",
     "test": "cross-env NODE_ENV=test jest"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/kuitos/qiankun.git"
-  },
-  "files": [
-    "dist",
-    "es",
-    "lib"
-  ],
-  "author": "Kuitos",
-  "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/kuitos/qiankun/issues"
-  },
-  "homepage": "https://github.com/kuitos/qiankun#readme",
-  "dependencies": {
-    "@babel/runtime": "^7.10.5",
-    "import-html-entry": "^1.9.0",
-    "lodash": "^4.17.11",
-    "single-spa": "^5.9.2",
-    "tslib": "^1.10.0"
-  },
-  "devDependencies": {
-    "@types/jest": "^25.1.4",
-    "@types/lodash": "^4.14.129",
-    "@types/vfile-message": "1.x",
-    "@umijs/fabric": "^2.0.7",
-    "babel-plugin-import": "^1.12.1",
-    "cross-env": "^7.0.2",
-    "dumi": "^1.1.0-beta.24",
-    "father-build": "^1.7.0",
-    "husky": "^2.3.0",
-    "jest": "^25.2.2",
-    "levenary": "^1.1.1",
-    "lint-staged": "^10.5.4",
-    "np": "^5.0.3",
-    "npm-run-all": "^4.1.5",
-    "prettier": "^2.1.2",
-    "rimraf": "^3.0.0",
-    "ts-jest": "^25.2.1",
-    "typescript": "^4.1.2",
-    "umi-plugin-hire": "^1.0.3"
-  },
-  "resolutions": {
-    "@types/react": "^17.x",
-    "@types/history": "^4.x"
-  },
   "husky": {
     "hooks": {
       "pre-commit": "lint-staged",
@@ -108,6 +76,11 @@
     ]
   },
   "jest": {
+    "coveragePathIgnorePatterns": [
+      "/node_modules/",
+      "/__tests__/",
+      "/dist/"
+    ],
     "moduleFileExtensions": [
       "js",
       "ts"
@@ -121,11 +94,38 @@
     ],
     "transform": {
       "^.+\\.ts$": "<rootDir>/node_modules/ts-jest"
-    },
-    "coveragePathIgnorePatterns": [
-      "/node_modules/",
-      "/__tests__/",
-      "/dist/"
-    ]
+    }
+  },
+  "resolutions": {
+    "@types/history": "^4.x",
+    "@types/react": "^17.x"
+  },
+  "dependencies": {
+    "@babel/runtime": "^7.10.5",
+    "import-html-entry": "^1.14.3",
+    "lodash": "^4.17.11",
+    "single-spa": "^5.9.2"
+  },
+  "devDependencies": {
+    "@types/jest": "^25.1.4",
+    "@types/lodash": "^4.14.129",
+    "@types/vfile-message": "1.x",
+    "@umijs/fabric": "^2.0.7",
+    "babel-plugin-import": "^1.12.1",
+    "cross-env": "^7.0.2",
+    "dumi": "^1.1.0-beta.24",
+    "father-build": "^1.7.0",
+    "globals": "^13.17.0",
+    "husky": "^2.3.0",
+    "jest": "^25.2.2",
+    "levenary": "^1.1.1",
+    "lint-staged": "^10.5.4",
+    "np": "^5.0.3",
+    "npm-run-all": "^4.1.5",
+    "prettier": "^2.1.2",
+    "rimraf": "^3.0.0",
+    "ts-jest": "^25.2.1",
+    "typescript": "^4.8.2",
+    "umi-plugin-hire": "^1.0.3"
   }
 }

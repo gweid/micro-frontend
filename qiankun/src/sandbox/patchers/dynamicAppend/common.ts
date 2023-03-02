@@ -5,7 +5,8 @@
 import { execScripts } from 'import-html-entry';
 import { isFunction } from 'lodash';
 import { frameworkConfiguration } from '../../../apis';
-
+import { qiankunHeadTagName } from '../../../utils';
+import { cachedGlobals } from '../../proxySandbox';
 import * as css from '../css';
 
 export const rawHeadAppendChild = HTMLHeadElement.prototype.appendChild;
@@ -18,6 +19,24 @@ const rawRemoveChild = HTMLElement.prototype.removeChild;
 const SCRIPT_TAG_NAME = 'SCRIPT';
 const LINK_TAG_NAME = 'LINK';
 const STYLE_TAG_NAME = 'STYLE';
+
+export const styleElementTargetSymbol = Symbol('target');
+
+type DynamicDomMutationTarget = 'head' | 'body';
+
+declare global {
+  interface HTMLLinkElement {
+    [styleElementTargetSymbol]: DynamicDomMutationTarget;
+  }
+
+  interface HTMLStyleElement {
+    [styleElementTargetSymbol]: DynamicDomMutationTarget;
+  }
+}
+
+export const getAppWrapperHeadElement = (appWrapper: Element | ShadowRoot): Element => {
+  return appWrapper.querySelector(qiankunHeadTagName)!;
+};
 
 export function isExecutableScriptType(script: HTMLScriptElement) {
   return (
@@ -46,6 +65,32 @@ export function isStyledComponentsLike(element: HTMLStyleElement) {
   return (
     !element.textContent &&
     ((element.sheet as CSSStyleSheet)?.cssRules.length || getStyledElementCSSRules(element)?.length)
+  );
+}
+
+const appsCounterMap = new Map<string, { bootstrappingPatchCount: number; mountingPatchCount: number }>();
+export function calcAppCount(
+  appName: string,
+  calcType: 'increase' | 'decrease',
+  status: 'bootstrapping' | 'mounting',
+): void {
+  const appCount = appsCounterMap.get(appName) || { bootstrappingPatchCount: 0, mountingPatchCount: 0 };
+  switch (calcType) {
+    case 'increase':
+      appCount[`${status}PatchCount`] += 1;
+      break;
+    case 'decrease':
+      // bootstrap patch just called once but its freer will be called multiple times
+      if (appCount[`${status}PatchCount`] > 0) {
+        appCount[`${status}PatchCount`] -= 1;
+      }
+      break;
+  }
+  appsCounterMap.set(appName, appCount);
+}
+export function isAllAppsUnmounted(): boolean {
+  return Array.from(appsCounterMap.entries()).every(
+    ([, { bootstrappingPatchCount: bpc, mountingPatchCount: mpc }]) => bpc === 0 && mpc === 0,
   );
 }
 
@@ -139,7 +184,8 @@ export type ContainerConfig = {
   appName: string;
   proxy: WindowProxy;
   strictGlobal: boolean;
-  dynamicStyleSheetElements: HTMLStyleElement[];
+  speedySandbox: boolean;
+  dynamicStyleSheetElements: Array<HTMLStyleElement | HTMLLinkElement>;
   appWrapperGetter: CallableFunction;
   scopedCSS: boolean;
   excludeAssetFilter?: CallableFunction;
@@ -149,6 +195,7 @@ function getOverwrittenAppendChildOrInsertBefore(opts: {
   rawDOMAppendOrInsertBefore: <T extends Node>(newChild: T, refChild?: Node | null) => T;
   isInvokedByMicroApp: (element: HTMLElement) => boolean;
   containerConfigGetter: (element: HTMLElement) => ContainerConfig;
+  target: DynamicDomMutationTarget;
 }) {
   return function appendChildOrInsertBefore<T extends Node>(
     this: HTMLHeadElement | HTMLBodyElement,
@@ -156,7 +203,7 @@ function getOverwrittenAppendChildOrInsertBefore(opts: {
     refChild: Node | null = null,
   ) {
     let element = newChild as any;
-    const { rawDOMAppendOrInsertBefore, isInvokedByMicroApp, containerConfigGetter } = opts;
+    const { rawDOMAppendOrInsertBefore, isInvokedByMicroApp, containerConfigGetter, target = 'body' } = opts;
     if (!isHijackingTag(element.tagName) || !isInvokedByMicroApp(element)) {
       return rawDOMAppendOrInsertBefore.call(this, element, refChild) as T;
     }
@@ -168,6 +215,7 @@ function getOverwrittenAppendChildOrInsertBefore(opts: {
         appWrapperGetter,
         proxy,
         strictGlobal,
+        speedySandbox,
         dynamicStyleSheetElements,
         scopedCSS,
         excludeAssetFilter,
@@ -182,7 +230,13 @@ function getOverwrittenAppendChildOrInsertBefore(opts: {
             return rawDOMAppendOrInsertBefore.call(this, element, refChild) as T;
           }
 
-          const mountDOM = appWrapperGetter();
+          Object.defineProperty(stylesheetElement, styleElementTargetSymbol, {
+            value: target,
+            writable: true,
+            configurable: true,
+          });
+
+          const appWrapper = appWrapperGetter();
 
           if (scopedCSS) {
             // exclude link elements like <link rel="icon" href="favicon.ico">
@@ -197,16 +251,17 @@ function getOverwrittenAppendChildOrInsertBefore(opts: {
                   : frameworkConfiguration.fetch?.fn;
               stylesheetElement = convertLinkAsStyle(
                 element,
-                (styleElement) => css.process(mountDOM, styleElement, appName),
+                (styleElement) => css.process(appWrapper, styleElement, appName),
                 fetch,
               );
               dynamicLinkAttachedInlineStyleMap.set(element, stylesheetElement);
             } else {
-              css.process(mountDOM, stylesheetElement, appName);
+              css.process(appWrapper, stylesheetElement, appName);
             }
           }
 
-          // eslint-disable-next-line no-shadow
+          const mountDOM = target === 'head' ? getAppWrapperHeadElement(appWrapper) : appWrapper;
+
           dynamicStyleSheetElements.push(stylesheetElement);
           const referenceNode = mountDOM.contains(refChild) ? refChild : null;
           return rawDOMAppendOrInsertBefore.call(mountDOM, stylesheetElement, referenceNode);
@@ -219,14 +274,20 @@ function getOverwrittenAppendChildOrInsertBefore(opts: {
             return rawDOMAppendOrInsertBefore.call(this, element, refChild) as T;
           }
 
-          const mountDOM = appWrapperGetter();
+          const appWrapper = appWrapperGetter();
+          const mountDOM = target === 'head' ? getAppWrapperHeadElement(appWrapper) : appWrapper;
+
           const { fetch } = frameworkConfiguration;
           const referenceNode = mountDOM.contains(refChild) ? refChild : null;
 
+          const scopedGlobalVariables = speedySandbox ? cachedGlobals : [];
+
           if (src) {
+            let isRedfinedCurrentScript = false;
             execScripts(null, [src], proxy, {
               fetch,
               strictGlobal,
+              scopedGlobalVariables,
               beforeExec: () => {
                 const isCurrentScriptConfigurable = () => {
                   const descriptor = Object.getOwnPropertyDescriptor(document, 'currentScript');
@@ -239,14 +300,23 @@ function getOverwrittenAppendChildOrInsertBefore(opts: {
                     },
                     configurable: true,
                   });
+                  isRedfinedCurrentScript = true;
                 }
               },
               success: () => {
                 manualInvokeElementOnLoad(element);
+                if (isRedfinedCurrentScript) {
+                  // @ts-ignore
+                  delete document.currentScript;
+                }
                 element = null;
               },
               error: () => {
                 manualInvokeElementOnError(element);
+                if (isRedfinedCurrentScript) {
+                  // @ts-ignore
+                  delete document.currentScript;
+                }
                 element = null;
               },
             });
@@ -257,7 +327,7 @@ function getOverwrittenAppendChildOrInsertBefore(opts: {
           }
 
           // inline script never trigger the onload and onerror event
-          execScripts(null, [`<script>${text}</script>`], proxy, { strictGlobal });
+          execScripts(null, [`<script>${text}</script>`], proxy, { strictGlobal, scopedGlobalVariables });
           const dynamicInlineScriptCommentElement = document.createComment('dynamic inline script replaced by qiankun');
           dynamicScriptAttachedCommentMap.set(element, dynamicInlineScriptCommentElement);
           return rawDOMAppendOrInsertBefore.call(mountDOM, dynamicInlineScriptCommentElement, referenceNode);
@@ -274,7 +344,8 @@ function getOverwrittenAppendChildOrInsertBefore(opts: {
 
 function getNewRemoveChild(
   headOrBodyRemoveChild: typeof HTMLElement.prototype.removeChild,
-  appWrapperGetterGetter: (element: HTMLElement) => ContainerConfig['appWrapperGetter'],
+  containerConfigGetter: (element: HTMLElement) => ContainerConfig,
+  target: DynamicDomMutationTarget,
 ) {
   return function removeChild<T extends Node>(this: HTMLHeadElement | HTMLBodyElement, child: T) {
     const { tagName } = child as any;
@@ -282,14 +353,24 @@ function getNewRemoveChild(
 
     try {
       let attachedElement: Node;
+      const { appWrapperGetter, dynamicStyleSheetElements } = containerConfigGetter(child as any);
+
       switch (tagName) {
+        case STYLE_TAG_NAME:
         case LINK_TAG_NAME: {
-          attachedElement = (dynamicLinkAttachedInlineStyleMap.get(child as any) as Node) || child;
+          attachedElement = dynamicLinkAttachedInlineStyleMap.get(child as any) || child;
+
+          // try to remove the dynamic style sheet
+          const dynamicElementIndex = dynamicStyleSheetElements.indexOf(attachedElement as HTMLLinkElement);
+          if (dynamicElementIndex !== -1) {
+            dynamicStyleSheetElements.splice(dynamicElementIndex, 1);
+          }
+
           break;
         }
 
         case SCRIPT_TAG_NAME: {
-          attachedElement = (dynamicScriptAttachedCommentMap.get(child as any) as Node) || child;
+          attachedElement = dynamicScriptAttachedCommentMap.get(child as any) || child;
           break;
         }
 
@@ -298,11 +379,11 @@ function getNewRemoveChild(
         }
       }
 
-      // container may had been removed while app unmounting if the removeChild action was async
-      const appWrapperGetter = appWrapperGetterGetter(child as any);
-      const container = appWrapperGetter();
+      const appWrapper = appWrapperGetter();
+      const container = target === 'head' ? getAppWrapperHeadElement(appWrapper) : appWrapper;
+      // container might have been removed while app unmounting if the removeChild action was async
       if (container.contains(attachedElement)) {
-        return rawRemoveChild.call(container, attachedElement) as T;
+        return rawRemoveChild.call(attachedElement.parentNode, attachedElement) as T;
       }
     } catch (e) {
       console.warn(e);
@@ -326,17 +407,20 @@ export function patchHTMLDynamicAppendPrototypeFunctions(
       rawDOMAppendOrInsertBefore: rawHeadAppendChild,
       containerConfigGetter,
       isInvokedByMicroApp,
+      target: 'head',
     }) as typeof rawHeadAppendChild;
     HTMLBodyElement.prototype.appendChild = getOverwrittenAppendChildOrInsertBefore({
       rawDOMAppendOrInsertBefore: rawBodyAppendChild,
       containerConfigGetter,
       isInvokedByMicroApp,
+      target: 'body',
     }) as typeof rawBodyAppendChild;
 
     HTMLHeadElement.prototype.insertBefore = getOverwrittenAppendChildOrInsertBefore({
       rawDOMAppendOrInsertBefore: rawHeadInsertBefore as any,
       containerConfigGetter,
       isInvokedByMicroApp,
+      target: 'head',
     }) as typeof rawHeadInsertBefore;
   }
 
@@ -345,14 +429,8 @@ export function patchHTMLDynamicAppendPrototypeFunctions(
     HTMLHeadElement.prototype.removeChild === rawHeadRemoveChild &&
     HTMLBodyElement.prototype.removeChild === rawBodyRemoveChild
   ) {
-    HTMLHeadElement.prototype.removeChild = getNewRemoveChild(
-      rawHeadRemoveChild,
-      (element) => containerConfigGetter(element).appWrapperGetter,
-    );
-    HTMLBodyElement.prototype.removeChild = getNewRemoveChild(
-      rawBodyRemoveChild,
-      (element) => containerConfigGetter(element).appWrapperGetter,
-    );
+    HTMLHeadElement.prototype.removeChild = getNewRemoveChild(rawHeadRemoveChild, containerConfigGetter, 'head');
+    HTMLBodyElement.prototype.removeChild = getNewRemoveChild(rawBodyRemoveChild, containerConfigGetter, 'body');
   }
 
   return function unpatch() {

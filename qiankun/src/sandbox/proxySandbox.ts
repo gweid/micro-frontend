@@ -1,12 +1,14 @@
 /* eslint-disable no-param-reassign */
+import { without } from 'lodash';
 /**
  * @author Kuitos
  * @since 2020-3-31
  */
 import type { SandBox } from '../interfaces';
 import { SandBoxType } from '../interfaces';
-import { nativeGlobal, nextTask } from '../utils';
-import { getTargetValue, setCurrentRunningApp, getCurrentRunningApp } from './common';
+import { isPropertyFrozen, nativeGlobal, nextTask } from '../utils';
+import { clearCurrentRunningApp, getCurrentRunningApp, getTargetValue, setCurrentRunningApp } from './common';
+import { globals } from './globals';
 
 type SymbolTarget = 'target' | 'globalContext';
 
@@ -26,7 +28,7 @@ function uniq(array: Array<string | symbol>) {
 const rawObjectDefineProperty = Object.defineProperty;
 
 const variableWhiteListInDev =
-  process.env.NODE_ENV === 'development' || window.__QIANKUN_DEVELOPMENT__
+  process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'development' || window.__QIANKUN_DEVELOPMENT__
     ? [
         // for react hot reload
         // see https://github.com/facebook/create-react-app/blob/66bf7dfc43350249e2f09d138a20840dae8a0a4a/packages/react-error-overlay/src/index.js#L180
@@ -34,7 +36,7 @@ const variableWhiteListInDev =
       ]
     : [];
 // who could escape the sandbox
-const variableWhiteList: PropertyKey[] = [
+const globalVariableWhiteList: string[] = [
   // FIXME System.js used a indirect call with eval, which would make it scope escape to global
   // To make System.js works well, we write it back to global window temporary
   // see https://github.com/systemjs/systemjs/blob/457f5b7e8af6bd120a279540477552a07d5de086/src/evaluate.js#L106
@@ -45,33 +47,33 @@ const variableWhiteList: PropertyKey[] = [
   ...variableWhiteListInDev,
 ];
 
+const inTest = process.env.NODE_ENV === 'test';
+const mockSafariTop = 'mockSafariTop';
+const mockTop = 'mockTop';
+const mockGlobalThis = 'mockGlobalThis';
+
+// these globals should be recorded while accessing every time
+const accessingSpiedGlobals = ['document', 'top', 'parent', 'eval'];
+const overwrittenGlobals = ['window', 'self', 'globalThis'].concat(inTest ? [mockGlobalThis] : []);
+export const cachedGlobals = Array.from(
+  new Set(without([...globals, ...overwrittenGlobals, 'requestAnimationFrame'], ...accessingSpiedGlobals)),
+);
+
+// transform cachedGlobals to object for faster element check
+const cachedGlobalObjects = cachedGlobals.reduce((acc, globalProp) => ({ ...acc, [globalProp]: true }), {});
+
 /*
- variables who are impossible to be overwrite need to be escaped from proxy sandbox for performance reasons
+ Variables who are impossible to be overwritten need to be escaped from proxy sandbox for performance reasons.
+ But overwritten globals must not be escaped, otherwise they will be leaked to the global scope.
+ see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/unscopables
  */
-const unscopables = {
-  undefined: true,
-  Array: true,
-  Object: true,
-  String: true,
-  Boolean: true,
-  Math: true,
-  Number: true,
-  Symbol: true,
-  parseFloat: true,
-  Float32Array: true,
-  isNaN: true,
-  Infinity: true,
-  Reflect: true,
-  Float64Array: true,
-  Function: true,
-  Map: true,
-  NaN: true,
-  Promise: true,
-  Proxy: true,
-  Set: true,
-  parseInt: true,
-  requestAnimationFrame: true,
-};
+const unscopables = without(cachedGlobals, ...overwrittenGlobals).reduce(
+  // Notes that babel will transpile spread operator to Object.assign({}, ...args), which will keep the prototype of Object in merged object,
+  // while this result used as Symbol.unscopables, it will make properties in Object.prototype always be escaped from proxy sandbox as unscopables check will look up prototype chain as well,
+  // such as hasOwnProperty, toString, valueOf, etc.
+  (acc, key) => ({ ...acc, [key]: true }),
+  {},
+);
 
 const useNativeWindowForBindingsProps = new Map<PropertyKey, boolean>([
   ['fetch', true],
@@ -87,7 +89,7 @@ function createFakeWindow(globalContext: Window) {
   /*
    copy the non-configurable property of global to fakeWindow
    see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Proxy/handler/getOwnPropertyDescriptor
-   > A property cannot be reported as non-configurable, if it does not exists as an own property of the target object or if it exists as a configurable own property of the target object.
+   > A property cannot be reported as non-configurable, if it does not exist as an own property of the target object or if it exists as a configurable own property of the target object.
    */
   Object.getOwnPropertyNames(globalContext)
     .filter((p) => {
@@ -109,7 +111,7 @@ function createFakeWindow(globalContext: Window) {
           p === 'parent' ||
           p === 'self' ||
           p === 'window' ||
-          (process.env.NODE_ENV === 'test' && (p === 'mockTop' || p === 'mockSafariTop'))
+          (inTest && (p === mockTop || p === mockSafariTop))
         ) {
           descriptor.configurable = true;
           /*
@@ -152,26 +154,11 @@ export default class ProxySandbox implements SandBox {
 
   proxy: WindowProxy;
 
-  globalContext: typeof window;
-
   sandboxRunning = true;
 
-  latestSetProp: PropertyKey | null = null;
+  private document = document;
 
-  private registerRunningApp(name: string, proxy: Window) {
-    if (this.sandboxRunning) {
-      const currentRunningApp = getCurrentRunningApp();
-      if (!currentRunningApp || currentRunningApp.name !== name) {
-        setCurrentRunningApp({ name, window: proxy });
-      }
-      // FIXME if you have any other good ideas
-      // remove the mark in next tick, thus we can identify whether it in micro app or not
-      // this approach is just a workaround, it could not cover all complex cases, such as the micro app runs in the same task context with master in some case
-      nextTask(() => {
-        setCurrentRunningApp(null);
-      });
-    }
-  }
+  latestSetProp: PropertyKey | null = null;
 
   active() {
     if (!this.sandboxRunning) activeSandboxCount++;
@@ -185,9 +172,13 @@ export default class ProxySandbox implements SandBox {
       ]);
     }
 
-    if (--activeSandboxCount === 0) {
-      variableWhiteList.forEach((p) => {
-        if (this.proxy.hasOwnProperty(p)) {
+    if (inTest || --activeSandboxCount === 0) {
+      // reset the global value to the prev value
+      Object.keys(this.globalWhitelistPrevDescriptor).forEach((p) => {
+        const descriptor = this.globalWhitelistPrevDescriptor[p];
+        if (descriptor) {
+          Object.defineProperty(this.globalContext, p, descriptor);
+        } else {
           // @ts-ignore
           delete this.globalContext[p];
         }
@@ -196,6 +187,11 @@ export default class ProxySandbox implements SandBox {
 
     this.sandboxRunning = false;
   }
+
+  // the descriptor of global variables in whitelist before it been modified
+  globalWhitelistPrevDescriptor: { [p in (typeof globalVariableWhiteList)[number]]: PropertyDescriptor | undefined } =
+    {};
+  globalContext: typeof window;
 
   constructor(name: string, globalContext = window) {
     this.name = name;
@@ -212,24 +208,23 @@ export default class ProxySandbox implements SandBox {
       set: (target: FakeWindow, p: PropertyKey, value: any): boolean => {
         if (this.sandboxRunning) {
           this.registerRunningApp(name, proxy);
-          // We must kept its description while the property existed in globalContext before
+          // We must keep its description while the property existed in globalContext before
           if (!target.hasOwnProperty(p) && globalContext.hasOwnProperty(p)) {
             const descriptor = Object.getOwnPropertyDescriptor(globalContext, p);
-            const { writable, configurable, enumerable } = descriptor!;
-            if (writable) {
-              Object.defineProperty(target, p, {
-                configurable,
-                enumerable,
-                writable,
-                value,
-              });
+            const { writable, configurable, enumerable, set } = descriptor!;
+            // only writable property can be overwritten
+            // here we ignored accessor descriptor of globalContext as it makes no sense to trigger its logic(which might make sandbox escaping instead)
+            // we force to set value by data descriptor
+            if (writable || set) {
+              Object.defineProperty(target, p, { configurable, enumerable, writable: true, value });
             }
           } else {
-            // @ts-ignore
             target[p] = value;
           }
 
-          if (variableWhiteList.indexOf(p) !== -1) {
+          // sync the property to globalContext
+          if (typeof p === 'string' && globalVariableWhiteList.indexOf(p) !== -1) {
+            this.globalWhitelistPrevDescriptor[p] = Object.getOwnPropertyDescriptor(globalContext, p);
             // @ts-ignore
             globalContext[p] = value;
           }
@@ -260,15 +255,11 @@ export default class ProxySandbox implements SandBox {
         }
 
         // hijack globalWindow accessing with globalThis keyword
-        if (p === 'globalThis') {
+        if (p === 'globalThis' || (inTest && p === mockGlobalThis)) {
           return proxy;
         }
 
-        if (
-          p === 'top' ||
-          p === 'parent' ||
-          (process.env.NODE_ENV === 'test' && (p === 'mockTop' || p === 'mockSafariTop'))
-        ) {
+        if (p === 'top' || p === 'parent' || (inTest && (p === mockTop || p === mockSafariTop))) {
           // if your master app in an iframe context, allow these props escape the sandbox
           if (globalContext === globalContext.parent) {
             return proxy;
@@ -282,18 +273,21 @@ export default class ProxySandbox implements SandBox {
         }
 
         if (p === 'document') {
-          return document;
+          return this.document;
         }
 
         if (p === 'eval') {
           return eval;
         }
 
-        const value = propertiesWithGetter.has(p)
-          ? (globalContext as any)[p]
-          : p in target
-          ? (target as any)[p]
-          : (globalContext as any)[p];
+        const actualTarget = propertiesWithGetter.has(p) ? globalContext : p in target ? target : globalContext;
+        const value = actualTarget[p];
+
+        // frozen value should return directly, see https://github.com/umijs/qiankun/issues/2015
+        if (isPropertyFrozen(actualTarget, p)) {
+          return value;
+        }
+
         /* Some dom api must be bound to native window, otherwise it would cause exception like 'TypeError: Failed to execute 'fetch' on 'Window': Illegal invocation'
            See this code:
              const proxy = new Proxy(window, {});
@@ -307,14 +301,15 @@ export default class ProxySandbox implements SandBox {
       // trap in operator
       // see https://github.com/styled-components/styled-components/blob/master/packages/styled-components/src/constants.js#L12
       has(target: FakeWindow, p: string | number | symbol): boolean {
-        return p in unscopables || p in target || p in globalContext;
+        // property in cachedGlobalObjects must return true to avoid escape from get trap
+        return p in cachedGlobalObjects || p in target || p in globalContext;
       },
 
       getOwnPropertyDescriptor(target: FakeWindow, p: string | number | symbol): PropertyDescriptor | undefined {
         /*
          as the descriptor of top/self/window/mockTop in raw window are configurable but not in proxy target, we need to get it from target to avoid TypeError
          see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Proxy/handler/getOwnPropertyDescriptor
-         > A property cannot be reported as non-configurable, if it does not exists as an own property of the target object or if it exists as a configurable own property of the target object.
+         > A property cannot be reported as non-configurable, if it does not existed as an own property of the target object or if it exists as a configurable own property of the target object.
          */
         if (target.hasOwnProperty(p)) {
           const descriptor = Object.getOwnPropertyDescriptor(target, p);
@@ -325,7 +320,7 @@ export default class ProxySandbox implements SandBox {
         if (globalContext.hasOwnProperty(p)) {
           const descriptor = Object.getOwnPropertyDescriptor(globalContext, p);
           descriptorTargetMap.set(p, 'globalContext');
-          // A property cannot be reported as non-configurable, if it does not exists as an own property of the target object
+          // A property cannot be reported as non-configurable, if it does not exist as an own property of the target object
           if (descriptor && !descriptor.configurable) {
             descriptor.configurable = true;
           }
@@ -340,7 +335,7 @@ export default class ProxySandbox implements SandBox {
         return uniq(Reflect.ownKeys(globalContext).concat(Reflect.ownKeys(target)));
       },
 
-      defineProperty(target: Window, p: PropertyKey, attributes: PropertyDescriptor): boolean {
+      defineProperty: (target: Window, p: PropertyKey, attributes: PropertyDescriptor): boolean => {
         const from = descriptorTargetMap.get(p);
         /*
          Descriptor must be defined to native window while it comes from native window via Object.getOwnPropertyDescriptor(window, p),
@@ -376,5 +371,22 @@ export default class ProxySandbox implements SandBox {
     this.proxy = proxy;
 
     activeSandboxCount++;
+  }
+
+  public patchDocument(doc: Document) {
+    this.document = doc;
+  }
+
+  private registerRunningApp(name: string, proxy: Window) {
+    if (this.sandboxRunning) {
+      const currentRunningApp = getCurrentRunningApp();
+      if (!currentRunningApp || currentRunningApp.name !== name) {
+        setCurrentRunningApp({ name, window: proxy });
+      }
+      // FIXME if you have any other good ideas
+      // remove the mark in next tick, thus we can identify whether it in micro app or not
+      // this approach is just a workaround, it could not cover all complex cases, such as the micro app runs in the same task context with master in some case
+      nextTask(clearCurrentRunningApp);
+    }
   }
 }

@@ -3,10 +3,9 @@
  * @since 2019-05-15
  */
 
-import { isFunction, snakeCase, once } from 'lodash';
-import { version } from './version';
-
+import { isFunction, once, snakeCase } from 'lodash';
 import type { FrameworkConfiguration } from './interfaces';
+import { version } from './version';
 
 export function toArray<T>(array: T | T[]): T[] {
   return Array.isArray(array) ? array : [array];
@@ -21,6 +20,7 @@ const nextTick: (cb: () => void) => void =
   typeof window.Zone === 'function' ? setTimeout : (cb) => Promise.resolve().then(cb);
 
 let globalTaskPending = false;
+
 /**
  * Run a callback before next task executing, and the invocation is idempotent in every singular task
  * That means even we called nextTask multi times in one task, only the first callback will be pushed to nextTick to be invoked.
@@ -37,6 +37,7 @@ export function nextTask(cb: () => void): void {
 }
 
 const fnRegexCheckCacheMap = new WeakMap<any | FunctionConstructor, boolean>();
+
 export function isConstructable(fn: () => any | FunctionConstructor) {
   // prototype methods might be changed while code running, so we need check it every time
   const hasPrototypeMethods =
@@ -75,7 +76,7 @@ export function isConstructable(fn: () => any | FunctionConstructor) {
  */
 const naughtySafari = typeof document.all === 'function' && typeof document.all === 'undefined';
 const callableFnCacheMap = new WeakMap<CallableFunction, boolean>();
-export const isCallable = (fn: any) => {
+export function isCallable(fn: any) {
   if (callableFnCacheMap.has(fn)) {
     return true;
   }
@@ -85,9 +86,35 @@ export const isCallable = (fn: any) => {
     callableFnCacheMap.set(fn, callable);
   }
   return callable;
-};
+}
+
+const frozenPropertyCacheMap = new WeakMap<any, Record<PropertyKey, boolean>>();
+export function isPropertyFrozen(target: any, p?: PropertyKey): boolean {
+  if (!target || !p) {
+    return false;
+  }
+
+  const targetPropertiesFromCache = frozenPropertyCacheMap.get(target) || {};
+
+  if (targetPropertiesFromCache[p]) {
+    return targetPropertiesFromCache[p];
+  }
+
+  const propertyDescriptor = Object.getOwnPropertyDescriptor(target, p);
+  const frozen = Boolean(
+    propertyDescriptor &&
+      propertyDescriptor.configurable === false &&
+      (propertyDescriptor.writable === false || (propertyDescriptor.get && !propertyDescriptor.set)),
+  );
+
+  targetPropertiesFromCache[p] = frozen;
+  frozenPropertyCacheMap.set(target, targetPropertiesFromCache);
+
+  return frozen;
+}
 
 const boundedMap = new WeakMap<CallableFunction, boolean>();
+
 export function isBoundedFunction(fn: CallableFunction) {
   if (boundedMap.has(fn)) {
     return boundedMap.get(fn);
@@ -101,8 +128,28 @@ export function isBoundedFunction(fn: CallableFunction) {
   return bounded;
 }
 
-export function getDefaultTplWrapper(name: string) {
-  return (tpl: string) => `<div id="${getWrapperId(name)}" data-name="${name}" data-version="${version}">${tpl}</div>`;
+export const qiankunHeadTagName = 'qiankun-head';
+
+export function getDefaultTplWrapper(name: string, sandboxOpts: FrameworkConfiguration['sandbox']) {
+  return (tpl: string) => {
+    let tplWithSimulatedHead: string;
+
+    if (tpl.indexOf('<head>') !== -1) {
+      // We need to mock a head placeholder as native head element will be erased by browser in micro app
+      tplWithSimulatedHead = tpl
+        .replace('<head>', `<${qiankunHeadTagName}>`)
+        .replace('</head>', `</${qiankunHeadTagName}>`);
+    } else {
+      // Some template might not be a standard html document, thus we need to add a simulated head tag for them
+      tplWithSimulatedHead = `<${qiankunHeadTagName}></${qiankunHeadTagName}>${tpl}`;
+    }
+
+    return `<div id="${getWrapperId(
+      name,
+    )}" data-name="${name}" data-version="${version}" data-sandbox-cfg=${JSON.stringify(
+      sandboxOpts,
+    )}>${tplWithSimulatedHead}</div>`;
+  };
 }
 
 export function getWrapperId(name: string) {
@@ -110,6 +157,8 @@ export function getWrapperId(name: string) {
 }
 
 export const nativeGlobal = new Function('return this')();
+
+export const nativeDocument = new Function('return document')();
 
 const getGlobalAppInstanceMap = once<() => Record<string, number>>(() => {
   if (!nativeGlobal.hasOwnProperty('__app_instance_name_map__')) {

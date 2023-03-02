@@ -75,6 +75,10 @@ type QiankunSpecialOpts = {
          * @deprecated We use strict mode by default
          */
         loose?: boolean;
+        /**
+         * use speed sandbox mode, enabled by default from 2.9.0
+         */
+        speedy?: boolean;
         patchers?: Patcher[];
       };
   /*
@@ -126,6 +130,7 @@ export type SandBox = {
   sandboxRunning: boolean;
   /** latest set property */
   latestSetProp?: PropertyKey | null;
+  patchDocument: (doc: Document) => void;
   /** 启动沙箱 */
   active: () => void;
   /** 关闭沙箱 */
