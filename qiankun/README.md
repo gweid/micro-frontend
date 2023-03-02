@@ -68,3 +68,19 @@ export async function update(props) {
 
 ### qiankun 与 single-spa 关系
 
+`qiankun`是基于 `single-spa` 实现的，而 `single-spa` 规定入口 js 文件必须通过 export 形式导出三个函数：`bootstrap`、`mount`、`unmount`，这也就不难理解为什么 `qiankun` 也需要导出这三个函数了
+
+
+
+同时，`qiankun` 对 `single-spa` 做了包装，降低了上手成本，并且优化了 `singe-spa` 只能加载 js 的缺点，可以加载 html 文件，这更加符合开发。因为目前大多数前端项目都是基于 webpack 打包成的单页面应用，入口都是 html 文件
+
+
+
+当然，`qiankun` 做的不仅仅是这些，下面，就看看，`qiankun` 基于 `single-spa` 做了哪些优化
+
+
+
+### qiankun 解读
+
+
+
