@@ -262,6 +262,7 @@ export async function loadApp<T extends ObjectType>(
     ...importEntryOpts
   } = configuration;
 
+  // 使用 import-html-entry 这个包加载解析入口 html
   // get the entry html content and script executor
   const { template, execScripts, assetPublicPath, getExternalScripts } = await importEntry(entry, importEntryOpts);
   // trigger external scripts loading to make sure all assets are ready before execScripts calling
@@ -317,6 +318,7 @@ export async function loadApp<T extends ObjectType>(
   const speedySandbox = typeof sandbox === 'object' ? sandbox.speedy !== false : true;
   let sandboxContainer;
   if (sandbox) {
+    // 如果开启了沙箱选项，创建沙箱
     sandboxContainer = createSandboxContainer(
       appInstanceId,
       // FIXME should use a strict sandbox logic while remount, see https://github.com/umijs/qiankun/issues/518
